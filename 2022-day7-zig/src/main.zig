@@ -1,20 +1,26 @@
 const std = @import("std");
 const Allocator = @import("std").mem.Allocator;
 
-const LineIterator = std.mem.SplitIterator(u8, std.mem.DelimiterType.sequence);
+const LineIterator = @import("./LineIterator.zig").LineIterator;
+const ConsoleOutput = @import("./ConsoleOutput.zig").ConsoleOutput;
+const FileSystemNode = @import("./FileSystemNode.zig").FileSystemNode;
+const DirectoryIterator = @import("./Directory.zig").DirectoryIterator;
 
 pub fn main() !void {
-    const allocator = std.heap.page_allocator;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var allocator = gpa.allocator();
 
     const file = try std.fs.cwd().openFile("input.txt", .{});
     defer file.close();
 
     const input = try file.readToEndAlloc(allocator, 60 * 1024 * 1024);
+    defer allocator.free(input);
+    std.debug.print("File size: {d}\n", .{input.len});
 
-    const output1 = try process1(input);
+    const output1 = try process1(allocator, input);
     std.debug.print("Result 1: {d}\n", .{output1});
 
-    const output2 = try process2(input);
+    const output2 = try process2(allocator, input);
     std.debug.print("Result 2: {d}\n", .{output2});
 }
 
@@ -22,166 +28,57 @@ const ProgramError = error{
     AnyError,
 };
 
-const File = struct { name: []const u8, size: usize };
-const Directory = struct {
-    name: []const u8,
-    children: std.ArrayList(FileSystemNode),
+pub fn process1(allocator: Allocator, input: []const u8) !usize {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
 
-    pub fn deinit(self: *Directory) void {
-        self.children.deinit();
-    }
-};
+    const lines: LineIterator = std.mem.splitSequence(u8, input, "\n");
+    const console_lines = try ConsoleOutput.parse_all(aa, lines);
+    const fs = try FileSystemNode.parse(aa, console_lines.items);
+    const alldirs = try fs.directory.list_subdirectories(aa);
 
-const CommandCD = struct {
-    target: []const u8,
-};
-const CommandLS = void;
-const ReplyDir = struct {
-    name: []const u8,
-};
-const ReplyFile = struct {
-    name: []const u8,
-    size: usize,
-};
-
-const ConsoleOutput = union(enum) {
-    cd: CommandCD,
-    ls: CommandLS,
-    dir: ReplyDir,
-    file: ReplyFile,
-
-    pub fn parse(line: []const u8) !ConsoleOutput {
-        if (line[0] == '$') {
-            if (line[2] == 'c') {
-                const target = line[4..];
-                return ConsoleOutput{ .cd = CommandCD{
-                    .target = target,
-                } };
-            }
-            if (line[2] == 'l') {
-                return ConsoleOutput{ .ls = CommandLS{} };
-            }
-        } else {
-            if (line[0] == 'd') {
-                // assume its a dir in the form "dir kfalksa"
-                const name = line[4..];
-                return ConsoleOutput{ .dir = ReplyDir{
-                    .name = name,
-                } };
-            }
-
-            // assume its a file int the form "123124 asdfskd.txt"
-            var words = std.mem.split(u8, line, " ");
-            const size_str = words.next();
-            const name = words.next();
-            if (size_str == null or name == null) {
-                return ProgramError.AnyError;
-            }
-            const size = try std.fmt.parseInt(usize, size_str.?, 10);
-
-            return ConsoleOutput{ .file = ReplyFile{
-                .name = name.?,
-                .size = size,
-            } };
-        }
-
-        return ProgramError.AnyError;
-    }
-
-    pub fn parse_all(lines: LineIterator, allocator: Allocator) !std.ArrayList(ConsoleOutput) {
-        var lines_mut = lines;
-        var console_lines = std.ArrayList(ConsoleOutput).init(allocator);
-
-        while (lines_mut.next()) |line| {
-            const output = try ConsoleOutput.parse(line);
-            try console_lines.append(output);
-        }
-
-        return console_lines;
-    }
-};
-
-const FileSystemNode = union(enum) {
-    directory: Directory,
-    file: File,
-
-    fn is_command(line: []const u8) bool {
-        if (line.len > 0 and line[0] == '$') {
-            return true;
-        }
-        return false;
-    }
-
-    pub fn parse(lines: LineIterator, allocator: Allocator) !FileSystemNode {
-        _ = allocator;
-        _ = lines;
-        // var root: ?FileSystemNode = null;
-        // var current_directory: ?FileSystemNode = null;
-
-        //         if (root == null) {
-        //             root = FileSystemNode{
-        //                 .directory = Directory{
-        //                     .name=name,
-        //                     .children=std.ArrayList(FilesystemNode).init(allocator),
-        //                 },
-        //             };
-        //         }
-
-        //     }
-        // }
-        return ProgramError.AnyError;
-    }
-
-    pub fn deinit(self: FileSystemNode) void {
-        switch (self) {
-            .directory => |*directory| {
-                for (directory) |*d| {
-                    d.children.deinit();
-                }
-            },
-            .file => {},
+    var size_sum: usize = 0;
+    for (alldirs.items) |dir| {
+        const size = dir.get_size_with_children();
+        if (size < 100000) {
+            size_sum += size;
         }
     }
-
-    pub fn get_node_size(node: FileSystemNode) usize {
-        switch (node) {
-            .directory => return 0,
-            .file => |file| return file.size,
-        }
-    }
-
-    pub fn get_size_with_children(node: FileSystemNode) usize {
-        _ = node;
-        return 0;
-    }
-};
-
-pub fn process1(input: []const u8) !usize {
-    const allocator = std.heap.page_allocator;
-
-    const lines: LineIterator = std.mem.split(u8, input, "\n");
-    const console_lines = try ConsoleOutput.parse_all(lines, allocator);
-    defer console_lines.deinit();
-
-    for (console_lines.items) |console_line| {
-        switch (console_line) {
-            .cd => |cd| std.debug.print("cd: {s}\n", .{cd.target}),
-            .ls => std.debug.print("ls:\n", .{}),
-            .dir => |dir| std.debug.print("dir: {s}\n", .{dir.name}),
-            .file => |file| std.debug.print("file: {s} {d}\n", .{ file.name, file.size }),
-        }
-    }
-
-    //const root = try FileSystemNode.parse(lines);
-    //defer root.deinit();
-
-    //return root.get_size_with_children();
-    return ProgramError.AnyError;
+    return size_sum;
 }
 
-pub fn process2(input: []const u8) !usize {
-    _ = input;
-    return 0;
+pub fn process2(allocator: Allocator, input: []const u8) !usize {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const lines: LineIterator = std.mem.splitSequence(u8, input, "\n");
+    const console_lines = try ConsoleOutput.parse_all(aa, lines);
+    const fs = try FileSystemNode.parse(aa, console_lines.items);
+    const alldirs = try fs.directory.list_subdirectories(aa);
+
+    const total_space = 70 * 1000 * 1000;
+    const used_space = fs.directory.get_size_with_children();
+    std.debug.assert(total_space >= used_space);
+    const free_space = total_space - used_space;
+    const required_space = 30 * 1000 * 1000;
+    const additional_free_space_needed = required_space - free_space;
+
+    std.debug.print("Require {d} additional space\n", .{additional_free_space_needed});
+
+    var smallest_delete_dir_size: usize = used_space;
+    for (alldirs.items) |dir| {
+        const size = dir.get_size_with_children();
+        if (size >= additional_free_space_needed and size < smallest_delete_dir_size) {
+            std.debug.print("Found {s} with size {d}\n", .{ dir.name, size });
+            smallest_delete_dir_size = size;
+        }
+    }
+
+    std.debug.assert(smallest_delete_dir_size >= additional_free_space_needed);
+
+    return smallest_delete_dir_size;
 }
 
 test "simple 1" {
@@ -211,18 +108,6 @@ test "simple 1" {
         \\7214296 k
     ;
 
-    try std.testing.expectEqual(@as(usize, 95437), try process1(data));
-}
-test "simple 2" {
-    const data =
-        \\vJrwpWtwJgWrhcsFMMfFFhFp
-        \\jqHRNqRjqzjGDLGLrsFMfFZSrLrFZsSL
-        \\PmmdzqPrVvPwwTWBwg
-        \\wMqvLMZHhHMvwLHjbvcjnnSBnvTQFn
-        \\ttgJtRGJQctTZtZT
-        \\CrZsJsPPZsGzwwsLwLmpwMDw
-    ;
-    _ = data;
-
-    // try std.testing.expectEqual(@as(usize, 70), try process2(data));
+    const allocator = std.testing.allocator;
+    try std.testing.expectEqual(@as(usize, 95437), try process1(allocator, data));
 }
