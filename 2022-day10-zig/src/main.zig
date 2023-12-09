@@ -77,7 +77,7 @@ const Processor = struct {
     }
 
     fn draw_crt(self: *Processor) !void {
-        if (@mod(self.cycle, 40) == 0 and self.cycle > 0) {
+        if (@mod(self.cycle - 1, 40) == 0 and self.cycle > 0) {
             try self.crt.append('\n');
         }
 
