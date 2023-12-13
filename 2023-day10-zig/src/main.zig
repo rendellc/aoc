@@ -181,8 +181,12 @@ const Grid = struct {
         std.debug.assert(xy.x < self.width);
         std.debug.assert(xy.y < self.height);
         const index = xy.x + (self.width + 1) * xy.y;
+        const char = self.data[@intCast(index)];
 
-        return PipePart.fromChar(self.data[@intCast(index)]) catch unreachable;
+        return PipePart.fromChar(char) catch {
+            print("Failed to get ({d},{d}) at index {d} ({c}) \n", .{ xy.x, xy.y, index, char });
+            unreachable;
+        };
     }
 
     pub fn canTravel(self: Grid, from: Vec2, to: Vec2) bool {
@@ -194,7 +198,7 @@ const Grid = struct {
         }
         const step = Vec2{
             .x = to.x - from.x,
-            .y = to.y - to.x,
+            .y = to.y - from.y,
         };
         const step_length = @abs(step.x) + @abs(step.y);
         // Only allow direction.x or direction.y, not both or zero
@@ -207,33 +211,36 @@ const Grid = struct {
         const move_north = step.y < 0;
         const move_south = step.y > 0;
 
-        const from_pipe = self.get(from);
-        const to_pipe = self.get(to);
-        print("Checking if we can travel from {c} to {c}\n", .{ self.get(from).toChar(), self.get(to).toChar() });
-
         var from_allows = false;
-        var to_allows = false;
+        const from_char = self.get(from).toChar();
         if (move_east) {
-            from_allows = from_pipe.allowsEastExit();
-            to_allows = to_pipe.allowsWestEntry();
+            from_allows = from_char == '-' or from_char == 'F' or from_char == 'L' or from_char == 'S';
+        } else if (move_west) {
+            from_allows = from_char == '-' or from_char == 'J' or from_char == '7' or from_char == 'S';
+        } else if (move_north) {
+            from_allows = from_char == '|' or from_char == 'J' or from_char == 'L' or from_char == 'S';
+        } else if (move_south) {
+            from_allows = from_char == '|' or from_char == 'F' or from_char == '7' or from_char == 'S';
         }
-        if (move_west) {
-            from_allows = from_pipe.allowsWestExit();
-            to_allows = to_pipe.allowsEastEntry();
-        }
-        if (move_south) {
-            from_allows = from_pipe.allowsSouthExit();
-            to_allows = to_pipe.allowsNorthEntry();
-        }
-        if (move_north) {
-            from_allows = from_pipe.allowsNorthExit();
-            to_allows = to_pipe.allowsSouthEntry();
+
+        var to_allows = false;
+
+        const to_char = self.get(to).toChar();
+        if (move_east) {
+            to_allows = to_char == '-' or to_char == 'J' or to_char == '7' or to_char == 'S';
+        } else if (move_west) {
+            to_allows = to_char == '-' or to_char == 'L' or to_char == 'F' or to_char == 'S';
+        } else if (move_north) {
+            to_allows = to_char == '|' or to_char == 'F' or to_char == '7' or to_char == 'S';
+        } else if (move_south) {
+            to_allows = to_char == '|' or to_char == 'L' or to_char == 'J' or to_char == 'S';
         }
 
         return from_allows and to_allows;
     }
 
     pub fn init(input: []const u8) Grid {
+        // print("Initializing grid\n{s}\n", .{input});
         var lines = std.mem.splitScalar(u8, input, '\n');
         const width = lines.peek().?.len;
 
@@ -257,28 +264,24 @@ const PipeWalker = struct {
     start: Vec2,
     current: Vec2,
     next: Vec2,
+    is_finished: bool,
 
     pub fn init(grid: *const Grid) PipeWalker {
         const start = grid.*.find('S').?;
-        print("Start: {d} {d}\n", .{ start.x, start.y });
+        // print("Start: {d} {d}\n", .{ start.x, start.y });
 
         var next: ?Vec2 = null;
 
         if (grid.*.canTravel(start, start.add(-1, 0))) {
-            print("Can go west\n", .{});
             next = start.add(-1, 0);
-        }
-        if (grid.*.canTravel(start, start.add(1, 0))) {
-            print("Can go east\n", .{});
+        } else if (grid.*.canTravel(start, start.add(1, 0))) {
             next = start.add(1, 0);
-        }
-        if (grid.*.canTravel(start, start.add(0, -1))) {
-            print("Can go north\n", .{});
+        } else if (grid.*.canTravel(start, start.add(0, -1))) {
             next = start.add(0, -1);
-        }
-        if (grid.*.canTravel(start, start.add(0, 1))) {
-            print("Can go south\n", .{});
+        } else if (grid.*.canTravel(start, start.add(0, 1))) {
             next = start.add(0, 1);
+        } else {
+            unreachable;
         }
 
         return .{
@@ -286,13 +289,91 @@ const PipeWalker = struct {
             .start = start,
             .current = start,
             .next = next.?,
+            .is_finished = false,
         };
     }
 
     pub fn step(self: *PipeWalker) void {
-        _ = self;
+        const move_step = Vec2{
+            .x = self.next.x - self.current.x,
+            .y = self.next.y - self.current.y,
+        };
+        self.current = self.next;
+
+        var possible_steps: [3]Vec2 = undefined;
+
+        possible_steps[0] = move_step; // keep going in the same direction
+        possible_steps[1] = Vec2{
+            .x = -move_step.y,
+            .y = move_step.x,
+        };
+        possible_steps[2] = Vec2{
+            .x = move_step.y,
+            .y = -move_step.x,
+        };
+
+        var next: ?Vec2 = null;
+        for (possible_steps) |s| {
+            if (self.grid.*.canTravel(self.current, self.current.add(s.x, s.y))) {
+                next = self.current.add(s.x, s.y);
+            }
+        }
+
+        std.debug.assert(next != null);
+        self.next = next.?;
+
+        if (self.grid.get(self.current) == PipePart.start) {
+            self.is_finished = true;
+        }
     }
 };
+
+fn ssa(angle: f64) f64 {
+    return std.math.atan2(f64, std.math.sin(angle), std.math.cos(angle));
+}
+
+fn computeWindingNumber(pos: Vec2, path: []const Vec2) i64 {
+    // print("Compute winding number: ({d},{d})\n", .{ pos.x, pos.y });
+    std.debug.assert(path.len > 0);
+
+    var dx = path[0].x - pos.x;
+    var dy = path[0].y - pos.y;
+    var previous_angle = std.math.atan2(f64, @floatFromInt(dy), @floatFromInt(dx));
+    // print("\tStarting angle: {d}, ({d},{d})\n", .{ previous_angle, pos.x, pos.y });
+
+    var angle_steps_sum: f64 = 0;
+
+    for (path, 0..) |path_pos, i| {
+        if (i >= path.len - 1) {
+            continue;
+        }
+        dx = path_pos.x - pos.x;
+        dy = path_pos.y - pos.y;
+        if (dx == 0 and dy == 0) {
+            // path crosses pos, so its winding number is 0
+            // print("\twinding number: {d} (path)\n", .{0});
+            return 0;
+        }
+
+        const angle = std.math.atan2(f64, @floatFromInt(dy), @floatFromInt(dx));
+        const angle_step = ssa(angle - previous_angle);
+        // print("\tangle: {d}, {d} ({d},{d})\n", .{ angle, angle_step, dx, dy });
+        previous_angle = angle;
+
+        angle_steps_sum += angle_step;
+    }
+
+    // read first path
+    dx = path[0].x - pos.x;
+    dy = path[0].y - pos.y;
+    const angle = std.math.atan2(f64, @floatFromInt(dy), @floatFromInt(dx));
+    const angle_step = ssa(angle - previous_angle);
+    angle_steps_sum += angle_step;
+
+    const winding_number_approx = angle_steps_sum / (2 * std.math.pi);
+    //print("\twinding number: {d}\n", .{winding_number_approx});
+    return @intFromFloat(@round(winding_number_approx));
+}
 
 fn process1(allocator: Allocator, input: []const u8) !i64 {
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -301,19 +382,49 @@ fn process1(allocator: Allocator, input: []const u8) !i64 {
     _ = aa;
 
     const grid = Grid.init(input);
-    print("Created grid with size: {d} {d}\n", .{ grid.width, grid.height });
-    print("Grid: {any}\n", .{grid});
-    const walker = PipeWalker.init(&grid);
-    print("Walker: {any}\n", .{walker});
+    var walker = PipeWalker.init(&grid);
 
-    return 0;
+    var walker_steps: i64 = 0;
+    while (!walker.is_finished) {
+        // print("Walker: ({d},{d})\n", .{ walker.current.x, walker.current.y });
+        walker.step();
+        walker_steps += 1;
+    }
+
+    return @divExact(walker_steps, 2);
 }
 
 fn process2(allocator: Allocator, input: []const u8) !i64 {
-    _ = input;
-    _ = allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
 
-    return 0;
+    const grid = Grid.init(input);
+    var walker = PipeWalker.init(&grid);
+
+    var pipe_path = std.ArrayList(Vec2).init(aa);
+    try pipe_path.append(walker.current);
+
+    while (!walker.is_finished) {
+        walker.step();
+        try pipe_path.append(walker.current);
+    }
+
+    // print("Created pipe path: {d}\n", .{pipe_path.items.len});
+    // print("Grid size: {d} {d}\n", .{ grid.width, grid.height });
+    // print("Steps: {d}\n", .{grid.width * grid.height * @as(i64, @intCast(pipe_path.items.len))});
+    var loops: i64 = 0;
+    for (0..@as(usize, @intCast(grid.width))) |x| {
+        for (0..@as(usize, @intCast(grid.height))) |y| {
+            const pos = Vec2{ .x = @intCast(x), .y = @intCast(y) };
+            const winding_number = computeWindingNumber(pos, pipe_path.items);
+            if (winding_number != 0) {
+                loops += 1;
+            }
+        }
+    }
+
+    return loops;
 }
 
 test "process 1: simple 1" {
@@ -340,4 +451,69 @@ test "process1: simple 2" {
 
     const allocator = std.testing.allocator;
     try std.testing.expectEqual(@as(i64, 8), try process1(allocator, data));
+}
+
+test "process2: simple 0" {
+    const data =
+        \\-L|F7
+        \\7S-7|
+        \\L|7||
+        \\-L-J|
+        \\L|-JF
+    ;
+
+    const allocator = std.testing.allocator;
+    try std.testing.expectEqual(@as(i64, 1), try process2(allocator, data));
+}
+
+test "process2: simple 1" {
+    const data =
+        \\...........
+        \\.S-------7.
+        \\.|F-----7|.
+        \\.||.....||.
+        \\.||.....||.
+        \\.|L-7.F-J|.
+        \\.|..|.|..|.
+        \\.L--J.L--J.
+        \\...........
+    ;
+
+    const allocator = std.testing.allocator;
+    try std.testing.expectEqual(@as(i64, 4), try process2(allocator, data));
+}
+
+test "process2: simple 2" {
+    const data =
+        \\..........
+        \\.S------7.
+        \\.|F----7|.
+        \\.||....||.
+        \\.||....||.
+        \\.|L-7F-J|.
+        \\.|..||..|.
+        \\.L--JL--J.
+        \\..........
+    ;
+
+    const allocator = std.testing.allocator;
+    try std.testing.expectEqual(@as(i64, 4), try process2(allocator, data));
+}
+
+test "process2: simple 3" {
+    const data =
+        \\.F----7F7F7F7F-7....
+        \\.|F--7||||||||FJ....
+        \\.||.FJ||||||||L7....
+        \\FJL7L7LJLJ||LJ.L-7..
+        \\L--J.L7...LJS7F-7L7.
+        \\....F-J..F7FJ|L7L7L7
+        \\....L7.F7||L7|.L7L7|
+        \\.....|FJLJ|FJ|F7|.LJ
+        \\....FJL-7.||.||||...
+        \\....L---J.LJ.LJLJ...
+    ;
+
+    const allocator = std.testing.allocator;
+    try std.testing.expectEqual(@as(i64, 8), try process2(allocator, data));
 }
