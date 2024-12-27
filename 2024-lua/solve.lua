@@ -31,13 +31,14 @@ local function main()
 	end
 
 	local inputfile = arg[1] .. ".txt"
-	local content = aoc:read_file(inputfile)
 	if ex1Passed then
+		local content = aoc:read_file(inputfile)
 		print("Answer 1: " .. solution:part1(content))
 	else
 		print("Answer 1: (solve example first)")
 	end
 	if ex2Passed then
+		local content = aoc:read_file(inputfile)
 		print("Answer 2: " .. solution:part2(content))
 	else
 		print("Answer 2: (solve example first)")
